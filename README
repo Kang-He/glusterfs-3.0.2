@@ -1,0 +1,59 @@
+GlusterFS is a flexible, powerful, POSIX-compliant cluster filesystem
+that can scale to several petabytes.
+
+GlusterFS works over either TCP/IP or high-performance Infiniband RDMA
+interconnect.
+
+GlusterFS provides striping and on-the-fly synchronous replication
+of files. GlusterFS has a fully distributed design, with no
+single point of failure.
+
+Please visit http://www.gluster.org/glusterfs.php for more info.
+
+——————————————————————————————————————————————————————————————————
+3.0.2搭建和使用——JY
+搭建和使用：
+安装必要依赖,不用改config.guess和sub
+#只用在server端安装以下依赖
+安装必要依赖（根据提示来，缺啥补啥）
+sudo yum -y install libacl*
+sudo yum -y install libxml2*
+sudo yum -y install userspace-rcu-devel
+sudo yum install libuuid-devel
+
+//redis
+wget http://download.redis.io/releases/redis-5.0.8.tar.gz
+tar -zxvf redis-5.0.8.tar.gz
+cd redis-5.0.8
+make
+sudo make install
+
+//hiredis
+git clone https://github.com/redis/hiredis.git
+cd hiredis
+make
+sudo make install
+
+//libevent
+git clone https://github.com/libevent/libevent.git
+cd libevent
+./autogen.sh
+./configure
+make
+sudo make install
+
+##
+cd glusterfs-3.0.2
+./autogen.sh
+./configure --prefix=$USER_PATH/glusterfs --enable-fusermount
+make
+sudo make install
+
+sudo vim /etc/ld.so.conf.d/local.conf
+加上 /usr/local/lib
+sudo ldconfig
+——————————————————————
+搭建完毕后，根据glusterfs安装目录下etc/glusterfs文件夹里的两个sample编写server.vol和client.vol
+#server和client启动
+命令都是gluster -l path_to_logfile -f path_to_volfile
+如果不-l指定，server和client的log都会默认写到安装目录var/log/glusterfs/glusterfs.log
