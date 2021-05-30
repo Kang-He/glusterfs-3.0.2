@@ -105,6 +105,9 @@ void
 iot_qos_eviction_and_print_app_throughput(iot_conf_t * conf);
 
 void
+iot_qos_app_delete(iot_conf_t * conf, const char* const hostname);
+
+void
 set_app_bw(iot_conf_t * conf, const char* const msg, double v_wbw, double v_rbw, double v_diops);
 
 

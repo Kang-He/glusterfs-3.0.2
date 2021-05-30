@@ -115,6 +115,7 @@ iot_qos_get_uuid(const char* src_uuid, char* uuid){
 	}
 	int len = i - UUID_OFFSET;
 	if(len > MAX_APP_IDENTIFY) return -1;
+	//gf_log(uuid, GF_LOG_ERROR, "jy_message:len=%d", len);
 	strncpy(uuid, src_uuid + UUID_OFFSET, len);
 	
 	//jy_test
@@ -476,6 +477,26 @@ out:
 	if(conf->app_count > 0 && eviction == _gf_true)
 		iot_qos_app_reweight(conf);
 	
+}
+
+void
+iot_qos_app_delete(iot_conf_t * conf, const char* const hostname){
+	APP_Qos_Info *tmp_app;
+	int delete = _gf_false;
+	char appname[60];
+	iot_qos_get_uuid(hostname, appname);
+	list_for_each_entry (tmp_app, &conf->apps, apps){
+		if(strncmp(tmp_app->uuid, appname, strlen(appname)) == 0){
+			delete = _gf_true;
+			list_del_init(&tmp_app->apps);
+			conf->app_count--;
+			free(tmp_app);
+			gf_log(conf->this->name, GF_LOG_ERROR, "jy_message: delete app %s sucess", appname);
+			break;
+		}
+	}
+	if(conf->app_count > 0 && delete == _gf_true)
+		iot_qos_app_reweight(conf);	
 }
 
 void
