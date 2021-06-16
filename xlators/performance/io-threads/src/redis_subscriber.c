@@ -180,6 +180,27 @@ double get_tag_value(const char* const msg){
 	return atof(d);
 }
 
+int get_nodename(const char* const msg, char* hostname){
+	if(strlen(msg) == 0)
+		return 0;
+	int idx = 0;
+	idx = get_next_tag(idx, msg);
+	
+	if(idx < 0){
+		strcpy(hostname, msg);
+		return 1;
+	}
+
+	idx -= 2;
+
+	int i = 0;
+	for(i = 0; i < 60 && i < idx; i++){
+		hostname[i] = msg[i];
+	}
+	if(i == 60) return 0;
+	hostname[i] = '\0';
+	return 1;
+}
 
 void deal_reply(CRedisSubscriber *p, redisReply *redis_reply){
 	/*
@@ -199,6 +220,11 @@ void deal_reply(CRedisSubscriber *p, redisReply *redis_reply){
 	*/
 	
 	if (redis_reply->type == REDIS_REPLY_ARRAY && redis_reply->elements == 3){
+		
+
+
+
+
 		int i = 0;
 		int idx = 0;
 		double v_wbw = -1;
@@ -214,6 +240,29 @@ void deal_reply(CRedisSubscriber *p, redisReply *redis_reply){
 		}
 		
 		gf_log(p->conf->this->name, GF_LOG_ERROR, "jy_message: sub:deal message");
+
+		//增加删除app的处理
+		if(redis_reply->element[2]->str == NULL) return;
+		if(strncmp(redis_reply->element[2]->str, "remove_app", strlen("remove_app")) == 0){
+			while(1){
+				idx = get_next_tag(idx, redis_reply->element[2]->str);
+				if(idx == -1)
+					break;
+				char hostname[60];
+				char *msg = redis_reply->element[2]->str + idx;
+				if(get_nodename(msg, hostname)){
+					gf_log(p->conf->this->name, GF_LOG_ERROR, "jy_message: delete app:%s ", hostname);
+					pthread_mutex_lock(&p->conf->otlock);
+					iot_qos_app_delete(p->conf, hostname);
+					pthread_mutex_unlock(&p->conf->otlock);
+				}
+				
+			}
+			return;
+			
+		}
+
+		//处理qos信息
 		while(tag_count > 0){
 			tag_count--;
 			

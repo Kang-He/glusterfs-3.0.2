@@ -28,22 +28,38 @@ struct app_qos_info
 	int req_count;
 	////double block_size;
 	//int queue_size;
-	double exp_bandwidth;	//MB/s
-	double limit;			//MB/s
-	double weight;
-	double limit_bandwidth;	//KB/s
-	double reserve_bandwidth;	//KB/s
+
+	//for read
+	double read_exp_bandwidth;  //MB/s
+	double read_limit;           //MB/s
+	double read_weight;
+	double read_limit_bandwidth; //KB/s
+	double read_reserve_bandwidth;   //KB/s
+	struct timeval read_last_time;  //limit tag
+	struct timeval read_last_reserve_time;
+	double read_block_size;
+
+
+	//for write
+	double write_exp_bandwidth;  //MB/s
+	double write_limit;           //MB/s
+	double write_weight;
+	double write_limit_bandwidth; //KB/s
+	double write_reserve_bandwidth;   //KB/s
+	struct timeval write_last_time;  //limit tag
+	struct timeval write_last_reserve_time;
+	double write_block_size;
+
+
 	//double cur_weight;
 	char uuid[MAX_APP_IDENTIFY];
 	pthread_mutex_t mutex;
 	//gf_boolean_t is_active;
 	//gf_boolean_t block;
-	struct timeval last_time;	//limit tag
-	struct timeval last_reserve_time;	//reserve tag
 	////TB tb;
 	APP_STATE state;
 	int IS_IOPS;
-	double block_size;
+	//double block_size;
 };
 
 
@@ -103,6 +119,9 @@ iot_qos_app_reweight(iot_conf_t * conf);
 
 void
 iot_qos_eviction_and_print_app_throughput(iot_conf_t * conf);
+
+void
+iot_qos_app_delete(iot_conf_t * conf, const char* const hostname);
 
 void
 set_app_bw(iot_conf_t * conf, const char* const msg, double v_wbw, double v_rbw, double v_diops);

@@ -1023,9 +1023,115 @@ iot_readv (call_frame_t *frame, xlator_t *this, fd_t *fd, size_t size,
                 ret = -ENOMEM;
                 goto out;
 	}
+        //QoS
+    //call_stack_t *root = frame->root;
+        client_id_t *client = (client_id_t*) frame->root->trans;
+    //gf_log(this->name, GF_LOG_ERROR, "jy_message:size of req:%d, count:%d", vector[0].iov_len, count);
+    //gf_log(this->name, GF_LOG_ERROR, "jy_message:req from client: %s", client->id);
 
-        ret = iot_schedule_ordered ((iot_conf_t *)this->private, fd->inode,
-                                    stub);
+	iot_conf_t *conf = (iot_conf_t *)this->private;
+	APP_Qos_Info *app = NULL;
+	int limit_flag = _gf_true;
+	pthread_mutex_lock(&conf->otlock);
+	{
+		//get pp
+		app = iot_qos_client_exist(client->id, conf);
+		if(app == NULL){
+			//gf_log(this->name, GF_LOG_ERROR, "jy_message:req from new client: %s", client->id);
+			double reserve;
+			double limit;
+			int IS_IOPS = 0;
+			double block_size = size;
+			//for bandwidth, 100 means 100 MB/s;
+			//for IOPS, 100 means 100 IO/s, block_size = X Byte
+			//so bandwidth = IOPS * block_size / (1024 * 1024);
+			/**
+			reserve = conf->default_reserve;
+			limit=conf->default_limit;
+			**/
+			
+			if(conf->app_count % 5 == 0){
+				//IS_IOPS = 0;
+				reserve = 30;
+				limit = 1000;
+			}
+			else{
+				//IS_IOPS = 0;
+				reserve = 30;
+				limit = 1000;
+			}
+			if(IS_IOPS){
+				
+				reserve = reserve * (block_size / (1024 * 1024));
+				limit = limit * (block_size / (1024 * 1024));
+			}
+			
+			app = iot_qos_app_info_insert(conf, reserve, limit, client->id, IS_IOPS, block_size);
+			if(app == NULL){
+				gf_log(this->name, GF_LOG_ERROR, "jy_message:iot_qos_app_info_insert error!");
+				pthread_mutex_unlock(&conf->otlock);
+				ret = iot_schedule_ordered ((iot_conf_t *)this->private, fd->inode, stub);
+				goto out;
+			}
+			else{
+				stub->app = app;
+                                //add_read
+				stub->limit_time = app->read_last_time;
+				pthread_mutex_lock(&app->mutex);
+				{
+					app->req_count++;
+					app->queue_size++;
+					iot_qos_set_next_reserve(app, stub);
+				}
+				pthread_mutex_unlock(&app->mutex);
+			}
+		}
+		else {
+			if(app->state == APP_SLEEP){
+				list_del_init(&app->apps);
+				app->state = APP_ACTIVE;
+				list_add(&app->apps, &conf->apps);
+				iot_qos_app_reweight(conf);
+			}
+		
+			stub->app = app;
+			pthread_mutex_lock(&app->mutex);
+			{
+				app->queue_size++;
+				app->req_count++;
+				limit_flag = iot_qos_set_next_limit(app, stub);
+				stub->reserve_flag = iot_qos_set_next_reserve(app, stub);
+			}
+			pthread_mutex_unlock(&app->mutex);
+		}
+	
+
+		if(limit_flag == _gf_false){
+			//gf_log(this->name, GF_LOG_ERROR, "jy_message:app %s reach limit", app->uuid);
+			ret = 0;
+			//iot_qos_notify_limit_wait(conf, stub->limit_time);
+			pthread_mutex_unlock(&conf->otlock);
+			pthread_mutex_lock(&conf->lworker->qlock);
+			{
+				if(list_empty(&conf->lworker->rqlist)){
+					list_add_tail(&stub->list, &conf->lworker->rqlist);
+					pthread_cond_broadcast (&conf->lworker->notifier);
+				}
+				else{
+					list_add_tail(&stub->list, &conf->lworker->rqlist);
+				}
+			}
+			pthread_mutex_unlock(&conf->lworker->qlock);
+			goto out;
+		}
+		else{
+        	ret = iot_schedule_ordered ((iot_conf_t *)this->private, fd->inode,stub);
+		}
+
+	}
+	pthread_mutex_unlock(&conf->otlock);
+        //ret = iot_schedule_ordered ((iot_conf_t *)this->private, fd->inode,
+        //                            stub);
 
 out:
         if (ret < 0) {
@@ -1236,7 +1342,9 @@ iot_writev (call_frame_t *frame, xlator_t *this, fd_t *fd,
 			}
 			else{
 				stub->app = app;
-				stub->limit_time = app->last_time;
+                                //add_read
+                                stub->limit_time = app->write_last_time;
+                                
 				pthread_mutex_lock(&app->mutex);
 				{
 					app->req_count++;
@@ -2601,7 +2709,7 @@ iot_dequeue_ordered (iot_worker_t *worker)
 
 				//QoS
 				//list_del_init(&stub->req);
-				if(stub->app != NULL && stub->fop == GF_FOP_WRITE){
+				if(stub->app != NULL && (stub->fop == GF_FOP_WRITE || stub->fop == GF_FOP_READ)){
 					if(iot_qos_is_over_limit_time(stub->limit_time) == _gf_false){
 						//gf_log(worker->conf->this->name, GF_LOG_ERROR, "jy_message:worker %d over limit!", worker->thread_idx);
 						//iot_qos_notify_wait(worker, stub->limit_time);
@@ -2672,7 +2780,7 @@ loop:
 				
 
 				//QoS
-				if(stub->app != NULL && stub->fop == GF_FOP_WRITE){
+				if(stub->app != NULL && (stub->fop == GF_FOP_WRITE || stub->fop == GF_FOP_READ)){
 					//gf_log(conf->this->name, GF_LOG_ERROR, "jy_message: worker %d deque. left queue_size:%d", worker->thread_idx, worker->queue_size);
 
 					APP_Qos_Info* app = (APP_Qos_Info*) stub->app;
@@ -2760,7 +2868,7 @@ iot_qos_lworker(void *arg){
 		
 		list_del_init(&stub->list);
 
-		if(stub->app != NULL && stub->fop == GF_FOP_WRITE){
+		if(stub->app != NULL && (stub->fop == GF_FOP_WRITE || stub->fop == GF_FOP_READ)){
 			if(iot_qos_is_over_limit_time(stub->limit_time) == _gf_false){
 				//gf_log(worker->conf->this->name, GF_LOG_ERROR, "jy_message:worker %d over limit!", worker->thread_idx);
 				iot_qos_notify_limit_wait(worker, stub->limit_time);
