@@ -31,9 +31,9 @@
 #define CHANNEL "monitor"
 #define INTERNAL 10
 // get client_id related macros
-#define DELIMER "-"
+#define DELIMER "."
 #define CLIENTID 60
-#define TIMES 3
+#define TIMES 1
 #define KB 1024
 #define MB 1024*1024
 #define MSGLEN 350
@@ -59,10 +59,16 @@ struct struct_client_id {
 typedef struct struct_client_id client_id_t;
 
 typedef struct CRedisPublisher {
+	//异步发布监控数据需要的
     struct event_base *_event_base; // libevent
     pthread_t _event_thread; 	    // event thread ID
     sem_t _event_sem;               // event thread 
     redisAsyncContext *_redis_context; // hiredis 
+
+	//同步订阅计算节点和应用的映射关系
+	pthread_t sub_pthread;
+	redisContext *sub_redis_context;
+
 	// redis related
 	char *redis_host;   
 	int redis_port;
@@ -95,6 +101,7 @@ struct qos_monitor_data {
 struct qos_monitor_private {
         gf_lock_t lock;
 		dict_t *metrics;
+		dict_t *node_appname;
 		CRedisPublisher *publisher;
 		int32_t qos_monitor_interval;
 		pthread_t monitor_thread;

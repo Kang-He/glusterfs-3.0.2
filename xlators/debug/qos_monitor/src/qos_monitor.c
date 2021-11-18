@@ -115,6 +115,167 @@ void get_client_id(char *client, char *client_id)
 		} 
 	}
 }
+int get_next_tag(int idx, const char* const msg){                                                                                                                                            
+	if(idx < 0) return -1;
+	while(msg[idx] != '\0' && msg[idx] != '^'){
+		idx++;
+	}
+	if(msg[idx] == '\0' ||msg[idx + 1] != '^' ){
+		return -1;
+	}
+	idx += 2;
+	return idx;
+}
+
+int get_nodename(const char* const msg, char* hostname) {
+    if (strlen(msg) == 0)
+        return 0;
+    int idx = 0;
+    idx = get_next_tag(idx, msg);
+
+    if (idx < 0) {
+        strcpy(hostname, msg);
+        return 1;
+    }
+
+
+    idx -= 2;
+
+
+    int i = 0;
+    for (i = 0; i < 60 && i < idx; i++) {
+        hostname[i] = msg[i];
+    }
+    if (i == 60) return 0;
+    hostname[i] = '\0';
+    return 1;
+}
+void dealreply(qos_monitor_private_t *p, redisReply *redis_reply){
+	if (redis_reply->type == REDIS_REPLY_ARRAY && redis_reply->elements == 3){
+		if(strncmp(redis_reply->element[1]->str,  "monitor", strlen( "monitor")) != 0)
+
+			return;
+		int i = 0;
+		int idx = 0;
+		int ret = 0;
+		for(i = 0; i < redis_reply->elements; i++){
+			gf_log("monitor", GF_LOG_ERROR, "monitor: sub: NO.%d  message: %s", i, redis_reply->element[i]->str);
+		}
+
+		if(strncmp(redis_reply->element[0]->str,  "message", strlen( "message")) != 0){
+			return;
+		}
+		   
+		gf_log("monitor", GF_LOG_ERROR, "monitor: sub:deal message");
+		
+
+		if (redis_reply->element[2]->str == NULL) return;
+        if (strncmp(redis_reply->element[2]->str, "app_nodes", strlen("app_nodes")) == 0) {
+			char *appname = CALLOC(60,sizeof(char));
+			char* msg;
+			idx = get_next_tag(idx, redis_reply->element[2]->str);
+			msg = redis_reply->element[2]->str + idx;
+			get_nodename(msg, appname);
+            while (1) {
+                idx = get_next_tag(idx, redis_reply->element[2]->str);
+                if (idx == -1) 
+                    break;
+                char hostname[60];
+                msg = redis_reply->element[2]->str + idx;
+                if (get_nodename(msg, hostname)) {
+                    gf_log("monitor", GF_LOG_ERROR, "monitor: node:%s will be inserted into app:%s", hostname, appname);
+                    LOCK(&p->lock);
+                    //dict_ref(p->node_appname);
+					//dict_set_str(p->node_appname, hostname, appname );
+					if(dict_set_str(p->node_appname, hostname, (char *)appname ) != 0)
+						gf_log("monitor", GF_LOG_ERROR, "set failed");
+					else{
+						char *testchar = NULL;
+						dict_get_ptr(p->node_appname, hostname, &testchar );
+						gf_log("monitor", GF_LOG_ERROR, "set success, %s->%s", hostname, testchar);
+						dict_get_str(p->node_appname, hostname, &testchar );
+                        gf_log("monitor", GF_LOG_ERROR, "set str, %s->%s", hostname, testchar);
+					}
+					//dict_unref(p->node_appname);
+                    UNLOCK(&p->lock);
+                }   
+            }   
+            return;
+                                                                                                                                                                                             
+        }else if(strncmp(redis_reply->element[2]->str, "remove_app", strlen("remove_app")) == 0){
+			char* msg;
+            while (1) {
+                idx = get_next_tag(idx, redis_reply->element[2]->str);
+                if (idx == -1) 
+                    break;
+                char hostname[60];
+                msg = redis_reply->element[2]->str + idx;
+                if (get_nodename(msg, hostname)) {
+                    gf_log("monitor", GF_LOG_ERROR, "monitor: node:%s will be deleted", hostname);
+                    LOCK(&p->lock);
+                    //dict_ref(p->node_appname);			
+					char *testchar = NULL;
+					if(dict_get_ptr(p->node_appname, hostname, &testchar )!= 0)
+						gf_log("monitor", GF_LOG_ERROR, "no %s exites", hostname);
+                    else
+						gf_log("monitor", GF_LOG_ERROR, "delete, %s->%s", hostname, testchar);
+					dict_del(p->node_appname, hostname);
+					//dict_unref(p->node_appname);
+                    UNLOCK(&p->lock);
+                }   
+            }   
+            return;
+            		
+		}
+	}
+  	
+}
+void *syncsubscribe( void *priv)                                                                                                                                                             
+{
+	gf_log("monitor", GF_LOG_ERROR, " sub begin...");
+    //redisContext *rc = redisConnect("40.0.20.111", 9809);
+	qos_monitor_private_t *private = (qos_monitor_private_t *)priv;
+    redisReply *reply = redisCommand(private->publisher->sub_redis_context, "SUBSCRIBE %s", "monitor");
+	//redisReply *reply = redisCommand(rc, "SUBSCRIBE %s", "monitor");
+	//gf_log("monitor", GF_LOG_ERROR, " sub: reply message. reply_type:%d", reply->type);
+    freeReplyObject(reply);
+    while(redisGetReply(private->publisher->sub_redis_context, (void **)&reply) == REDIS_OK){
+		if(reply == NULL){
+			gf_log("monitor", GF_LOG_ERROR, " sub: reply = NULL");
+            return;
+		}
+        else{
+            gf_log("monitor", GF_LOG_ERROR, " sub: get command_callback message. reply_type:%d", reply->type);
+            dealreply(private, reply);
+        }
+		freeReplyObject(reply);
+    }   
+}
+
+//添加的同步订阅node和应用映射关系功能
+int redis_syncconnect(void *pthis)
+{
+    CRedisPublisher *p = (CRedisPublisher *)pthis;
+    // connect redis
+    p->sub_redis_context = redisConnect(p->redis_host, p->redis_port);    // 异步连接到redis服务器上，使用默认端口
+    if (NULL == p->sub_redis_context)
+    {
+		gf_log("monitor", GF_LOG_ERROR,
+               "Connect redis failed.\n");
+        return 1;
+    }
+
+    if (p->sub_redis_context->err)
+    {
+		gf_log("monitor", GF_LOG_ERROR,
+               "Connect redis error: %d, %s\n",
+            p->sub_redis_context->err, p->sub_redis_context->errstr);    // 输出错误信息
+        return 1;
+    }
+	gf_log("monitor", GF_LOG_ERROR,
+               "Connect redis ok\n");	
+	return 0;
+}
 
 /* hiredis 相关函数*/
 // 事件分发线程函数
@@ -462,11 +623,16 @@ void func(dict_t *this, char *key, data_t *value, void *data)
 		
 	}
 	
-	LOCK(&priv->metrics->lock);
-	_qos_init_monitor_data(monitor_data);
-	UNLOCK(&priv->metrics->lock);
+	if(monitor_data->data_written == 0 && monitor_data->data_read == 0){
+        dict_ref(priv->metrics);
+        dict_del(priv->metrics,key);
+        dict_unref(priv->metrics);
+    }else{
+         LOCK(&priv->metrics->lock);
+         _qos_init_monitor_data(monitor_data);
+         UNLOCK(&priv->metrics->lock);
+    }
 }
-
 void * _qos_monitor_thread(xlator_t *this)
 {
 	qos_monitor_private_t *priv = NULL;
@@ -629,6 +795,7 @@ qos_monitor_writev_cbk (call_frame_t *frame,
         qos_monitor_private_t *priv = NULL;
 		client_id_t *client = NULL;
 		struct qos_monitor_data *monitor_data = NULL;
+		char *appname = NULL;
 		struct timeval begin;
 		struct timeval end;
 		int ret = 0;
@@ -643,6 +810,16 @@ qos_monitor_writev_cbk (call_frame_t *frame,
 		 }
 		LOCK(&priv->lock);
 		if (priv->metrics != NULL) {
+			dict_ref(priv->node_appname);
+         	ret = dict_get_str(priv->node_appname, key, &appname);
+         	if(ret != 0){
+            	dict_unref(priv->node_appname);
+            	//goto out;
+         	}else{
+            	strcpy(key, appname);
+            	dict_unref(priv->node_appname);
+         	}
+			
 			dict_ref(priv->metrics);
 			ret = dict_get_ptr(priv->metrics, key, (void **)&monitor_data);
 			//gf_log("sh", GF_LOG_INFO, "dict_get_ptr fini.");
@@ -687,6 +864,7 @@ qos_monitor_readv_cbk (call_frame_t *frame,
 	qos_monitor_private_t *priv = NULL;
 	client_id_t *client = NULL;
 	struct qos_monitor_data *monitor_data = NULL;
+	char* appname = NULL;
 	struct timeval begin;
 	struct timeval end;
 	int ret = 0;
@@ -701,6 +879,15 @@ qos_monitor_readv_cbk (call_frame_t *frame,
 	 }
 	LOCK(&priv->lock);
 	if (priv->metrics != NULL) {
+		dict_ref(priv->node_appname);
+        ret = dict_get_ptr(priv->node_appname, key, &appname);
+        if(ret != 0){
+            dict_unref(priv->node_appname);
+            //goto out;
+        }else{
+            strcpy(key, appname);
+            dict_unref(priv->node_appname);
+        }
 		dict_ref(priv->metrics);
 		ret = dict_get_ptr(priv->metrics, key, (void **)&monitor_data);
 		//gf_log("sh", GF_LOG_INFO, "dict_get_ptr fini.");
@@ -1006,6 +1193,7 @@ qos_monitor_readv (call_frame_t *frame,
 	 qos_monitor_private_t *priv = NULL;
 	 client_id_t *client = NULL;
 	 struct qos_monitor_data *monitor_data = NULL;
+	 char *appname =NULL;
 	 int ret = 0;
 	 char key[CLIENTID] = {'\0'};
 	 //gf_log("sh", GF_LOG_INFO, "enter.");
@@ -1020,6 +1208,18 @@ qos_monitor_readv (call_frame_t *frame,
 	 //gf_log("sh", GF_LOG_INFO, "lock");
 	 if (priv->metrics != NULL) {
 		 //gf_log("sh", GF_LOG_INFO, "priv->metrics != NULL.");
+
+ 		//根据node获取appname
+		dict_ref(priv->node_appname);
+        ret = dict_get_str(priv->node_appname, key, &appname);
+        if(ret != 0){
+            dict_unref(priv->node_appname);
+            //goto out;
+        }else{
+            strcpy(key, appname);
+            dict_unref(priv->node_appname);
+        }	
+
 		 dict_ref(priv->metrics);
 
 		 //gf_log("sh", GF_LOG_INFO, "dict_get_ptr.");
@@ -1080,6 +1280,7 @@ qos_monitor_writev (call_frame_t *frame,
 		qos_monitor_private_t *priv = NULL;
 		client_id_t *client = NULL;
 		struct qos_monitor_data *monitor_data = NULL;
+		char *appname =NULL;
 		int ret = 0;
 		
 		char key[CLIENTID] = {'\0'};
@@ -1096,6 +1297,18 @@ qos_monitor_writev (call_frame_t *frame,
 		//gf_log("sh", GF_LOG_INFO, "lock");
 		if (priv->metrics != NULL) {
 			//gf_log("sh", GF_LOG_INFO, "priv->metrics != NULL.");
+
+			//根据node获取appname
+		 	dict_ref(priv->node_appname);
+         	ret = dict_get_str(priv->node_appname, key, &appname);
+         	if(ret != 0){
+            	dict_unref(priv->node_appname);
+            	//goto out;
+         	}else{
+            	strcpy(key, appname);
+            	dict_unref(priv->node_appname);
+         	}	
+
 			dict_ref(priv->metrics);
 
 			//gf_log("sh", GF_LOG_INFO, "dict_get_ptr.");
@@ -1186,6 +1399,9 @@ init (xlator_t *this)
 		priv->metrics = dict_new();
 		ERR_ABORT (priv->metrics);  
 
+		priv->node_appname = dict_new();
+		ERR_ABORT (priv->node_appname); 
+
         options = this->options;
 		interval = data_to_int32 (dict_get (options, "monitor-interval"));
 		if (interval == -1)
@@ -1208,21 +1424,21 @@ init (xlator_t *this)
 		
 		// redis相关数据结构初始化
 		if (redis_host) {
-			priv->publisher->redis_host = CALLOC (1, sizeof(redis_host));
+			priv->publisher->redis_host = CALLOC (1, strlen(redis_host));
 			ERR_ABORT(priv->publisher->redis_host);
 			strcpy(priv->publisher->redis_host, redis_host);
 		} else {
-			priv->publisher->redis_host = CALLOC (1, sizeof(HOST));
+			priv->publisher->redis_host = CALLOC (1, strlen(HOST));
 			ERR_ABORT(priv->publisher->redis_host);
 			strcpy(priv->publisher->redis_host, HOST);
 		}
 		
 		if (publish_channel) {
-			priv->publisher->channel = CALLOC (1, sizeof(publish_channel));
+			priv->publisher->channel = CALLOC (1, strlen(publish_channel));
 			ERR_ABORT(priv->publisher->channel);
 			strcpy(priv->publisher->channel, publish_channel);
 		} else {
-			priv->publisher->channel = CALLOC (1, sizeof(CHANNEL));
+			priv->publisher->channel = CALLOC (1, strlen(CHANNEL));
 			ERR_ABORT(priv->publisher->channel);
 			strcpy(priv->publisher->channel, CHANNEL);
 		}
@@ -1232,6 +1448,17 @@ init (xlator_t *this)
 		gf_log (this->name, GF_LOG_INFO,
                         "interval = %d, redis-host: %s, publish-channel: %s, redis-port: %d", 
 						priv->qos_monitor_interval, priv->publisher->redis_host, priv->publisher->channel, priv->publisher->redis_port);
+
+		//订阅管道获取node和app的对应关系
+		//subscribe("monitor", priv);
+		//连接redis
+		redis_syncconnect(priv->publisher);
+		ret = pthread_create( &(priv->publisher->sub_pthread), NULL, &syncsubscribe, priv);                                                       
+        if(ret != 0){
+			gf_log("monitor", GF_LOG_ERROR, " sub_pthread failed");
+		}else{
+			gf_log("monitor", GF_LOG_ERROR, " sub_pthread success");
+        }
 		
 		ret = redis_init(priv->publisher);
 		if (!ret)
