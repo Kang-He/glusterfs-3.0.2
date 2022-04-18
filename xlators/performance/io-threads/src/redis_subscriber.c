@@ -261,7 +261,18 @@ void deal_reply(CRedisSubscriber *p, redisReply *redis_reply){
 			return;
 			
 		}
-
+		//设置default-bandwidth
+                if (strncmp(redis_reply->element[2]->str, "set_bw", strlen("set_bw")) == 0) {
+                        gf_log(p->conf->this->name, GF_LOG_ERROR, " last default-BW = %d", p->conf->default_BW);
+                        idx = get_next_tag(idx, redis_reply->element[2]->str);
+                        char* msg = redis_reply->element[2]->str + idx;
+                        pthread_mutex_lock(&p->conf->otlock);
+                        p->conf->default_BW = atoi(msg)*1024;
+                        pthread_mutex_unlock(&p->conf->otlock);
+                        gf_log(p->conf->this->name, GF_LOG_ERROR, "set default-BW = %d", p->conf->default_BW);
+                        return;
+                }
+		
 		//处理qos信息
 		while(tag_count > 0){
 			tag_count--;
